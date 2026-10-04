@@ -11,7 +11,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let enabledItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
-    private let soundItem = NSMenuItem(title: "Play Sound", action: #selector(toggleSound), keyEquivalent: "")
+    private let soundItem = NSMenuItem(title: "Play Sounds", action: #selector(toggleSound), keyEquivalent: "")
+    private let hintItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private var currentSymbol: String?
+    private let stopRecordingItem = NSMenuItem(title: "Stop Recording", action: #selector(stopRecording), keyEquivalent: "")
+    private let systemAudioItem = NSMenuItem(title: "Record System Audio", action: #selector(toggleSystemAudio), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private let triggerMenu = NSMenu()
     private let durationMenu = NSMenu()
@@ -21,7 +25,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         .init(title: "Hold only", modifiers: []),
         .init(title: "⌃ Control + Hold", modifiers: .maskControl),
         .init(title: "⌥ Option + Hold", modifiers: .maskAlternate),
-        .init(title: "⇧ Shift + Hold", modifiers: .maskShift),
         .init(title: "⌘ Command + Hold", modifiers: .maskCommand),
     ]
     private let durationOptionsMs = [200, 350, 500, 750]
@@ -33,7 +36,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "HoldShot")
+            button.toolTip = "HoldPicker"
             button.image?.isTemplate = true
         }
 
@@ -41,6 +44,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         statusItem.menu = menu
 
         captureController.onStatusChange = { [weak self] _ in self?.refresh() }
+        captureController.recording.onStateChange = { [weak self] _ in self?.refresh() }
         refresh()
     }
 
@@ -52,6 +56,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         statusLine.isEnabled = false
         menu.addItem(statusLine)
+
+        hintItem.isEnabled = false
+        menu.addItem(hintItem)
+
+        stopRecordingItem.target = self
+        menu.addItem(stopRecordingItem)
         menu.addItem(.separator())
 
         enabledItem.target = self
@@ -80,6 +90,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         soundItem.target = self
         menu.addItem(soundItem)
 
+        menu.addItem(.separator())
+
+        systemAudioItem.target = self
+        menu.addItem(systemAudioItem)
+
+        let openFolder = NSMenuItem(title: "Open Recordings Folder", action: #selector(openRecordingsFolder), keyEquivalent: "")
+        openFolder.target = self
+        menu.addItem(openFolder)
+
+        let chooseFolder = NSMenuItem(title: "Change Recordings Folder…", action: #selector(chooseRecordingsFolder), keyEquivalent: "")
+        chooseFolder.target = self
+        menu.addItem(chooseFolder)
+
+        menu.addItem(.separator())
+
         loginItem.target = self
         menu.addItem(loginItem)
 
@@ -95,7 +120,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit HoldShot", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit HoldPicker", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
@@ -107,19 +132,39 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func refresh() {
+        let recordingState = captureController.recording.state
+        stopRecordingItem.isHidden = { if case .recording = recordingState { return false } else { return true } }()
+
         switch captureController.status {
         case .active:
-            statusLine.title = "HoldShot is active"
+            switch recordingState {
+            case .recording: statusLine.title = "Recording…"
+            case .starting: statusLine.title = "Starting recording…"
+            case .saving: statusLine.title = "Saving recording…"
+            case .idle: statusLine.title = "HoldPicker is active"
+            }
             statusItem.button?.appearsDisabled = false
         case .disabled:
-            statusLine.title = "HoldShot is paused"
+            statusLine.title = "HoldPicker is paused"
             statusItem.button?.appearsDisabled = true
         case .needsAccessibility:
             statusLine.title = "Waiting for Accessibility permission…"
             statusItem.button?.appearsDisabled = true
         }
 
+        let isRecording = recordingState != .idle
+        let symbol = isRecording ? "record.circle" : "camera.viewfinder"
+        if currentSymbol != symbol {
+            currentSymbol = symbol
+            let label = isRecording ? "HoldPicker, recording" : "HoldPicker"
+            statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            statusItem.button?.image?.isTemplate = true
+        }
+
+        hintItem.title = Self.gestureHint(for: preferences.requiredModifiers)
+
         enabledItem.state = preferences.isEnabled ? .on : .off
+        systemAudioItem.state = preferences.recordsSystemAudio ? .on : .off
         soundItem.state = preferences.playsSound ? .on : .off
 
         let required = preferences.requiredModifiers.rawValue
@@ -159,6 +204,35 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
+    @objc private func stopRecording() {
+        captureController.recording.stop()
+    }
+
+    @objc private func toggleSystemAudio() {
+        preferences.recordsSystemAudio.toggle()
+        refresh()
+    }
+
+    @objc private func openRecordingsFolder() {
+        let folder = preferences.recordingsFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
+    }
+
+    @objc private func chooseRecordingsFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = preferences.recordingsFolder
+        panel.prompt = "Use Folder"
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            preferences.recordingsFolder = url
+        }
+    }
+
     @objc private func toggleLaunchAtLogin() {
         do {
             try LaunchAtLogin.set(enabled: !LaunchAtLogin.isEnabled)
@@ -178,6 +252,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+}
+
+extension StatusBarController {
+    /// "Hold to screenshot · ⇧ + Hold to record", prefixed with the trigger modifier when one is set.
+    static func gestureHint(for trigger: CGEventFlags) -> String {
+        var prefix = ""
+        if trigger.contains(.maskControl) { prefix += "⌃" }
+        if trigger.contains(.maskAlternate) { prefix += "⌥" }
+        if trigger.contains(.maskCommand) { prefix += "⌘" }
+        let shot = prefix.isEmpty ? "Hold" : "\(prefix) + Hold"
+        return "\(shot) to screenshot · \(prefix)⇧ + Hold to record"
     }
 }
 

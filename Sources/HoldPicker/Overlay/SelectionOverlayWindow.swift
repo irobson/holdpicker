@@ -1,4 +1,5 @@
 import AppKit
+import HoldPickerCore
 
 /// A transparent, click-through window covering one screen while the user
 /// drags out a selection. Mouse input never reaches it: the event tap owns
@@ -10,10 +11,13 @@ final class SelectionOverlayWindow: NSWindow {
     let cgFrame: CGRect
     private let overlayView: SelectionOverlayView
 
-    init(screen: NSScreen) {
+    let mode: CaptureMode
+
+    init(screen: NSScreen, mode: CaptureMode) {
         targetScreen = screen
+        self.mode = mode
         cgFrame = ScreenGeometry.cgRect(fromCocoa: screen.frame)
-        overlayView = SelectionOverlayView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        overlayView = SelectionOverlayView(frame: NSRect(origin: .zero, size: screen.frame.size), mode: mode)
 
         super.init(
             contentRect: screen.frame,

@@ -2,27 +2,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "HoldShot",
+    name: "HoldPicker",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "HoldShot", targets: ["HoldShot"]),
-        .library(name: "HoldShotCore", targets: ["HoldShotCore"]),
+        .executable(name: "HoldPicker", targets: ["HoldPicker"]),
+        .library(name: "HoldPickerCore", targets: ["HoldPickerCore"]),
     ],
     targets: [
         // Pure logic: gesture state machine and geometry helpers. No AppKit.
-        .target(name: "HoldShotCore"),
+        .target(name: "HoldPickerCore"),
 
         // The menu bar application.
         .executableTarget(
-            name: "HoldShot",
-            dependencies: ["HoldShotCore"],
+            name: "HoldPicker",
+            dependencies: ["HoldPickerCore"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreMedia"),
                 .linkedFramework("ServiceManagement"),
             ]
         ),
 
-        .testTarget(name: "HoldShotCoreTests", dependencies: ["HoldShotCore"]),
+        .testTarget(name: "HoldPickerCoreTests", dependencies: ["HoldPickerCore"]),
     ]
 )

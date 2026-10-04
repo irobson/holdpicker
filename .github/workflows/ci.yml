@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, test and bundle
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcode-select -p
+          swift --version
+
+      - name: Test
+        run: scripts/test.sh
+
+      - name: Bundle (release, universal, ad-hoc signed)
+        run: scripts/bundle.sh
+        env:
+          UNIVERSAL: "1"
+
+      - name: Verify bundle
+        run: |
+          plutil -lint build/HoldPicker.app/Contents/Info.plist
+          codesign --verify --strict --verbose=2 build/HoldPicker.app
+          lipo -archs build/HoldPicker.app/Contents/MacOS/HoldPicker
+          lipo build/HoldPicker.app/Contents/MacOS/HoldPicker -verify_arch arm64 x86_64
+
+      - name: Package
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/HoldPicker.app HoldPicker.zip
+          ls -lh HoldPicker.zip
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoldPicker-${{ github.sha }}
+          path: HoldPicker.zip
+          retention-days: 30
+          if-no-files-found: error

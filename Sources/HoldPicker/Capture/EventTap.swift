@@ -21,6 +21,9 @@ final class EventTap {
 
     private let mask: CGEventMask
     private let handler: Handler
+    /// Called after macOS disabled the tap and it was re-enabled. Events were
+    /// lost in between, so any gesture in progress must be abandoned.
+    var onReenabled: (@MainActor () -> Void)?
     private var port: CFMachPort?
     private var source: CFRunLoopSource?
 
@@ -71,6 +74,7 @@ final class EventTap {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // macOS disables taps that take too long. Re-enable and move on.
             if let port { CGEvent.tapEnable(tap: port, enable: true) }
+            onReenabled?()
             return Unmanaged.passUnretained(event)
         default:
             return handler(type, event)

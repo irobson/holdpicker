@@ -1,6 +1,6 @@
 # Architecture
 
-HoldShot is small on purpose. This document explains the parts that are not
+HoldPicker is small on purpose. This document explains the parts that are not
 obvious from reading the code top to bottom: the event interception trick, the
 coordinate systems, and why each module is where it is.
 
@@ -18,15 +18,26 @@ coordinate systems, and why each module is where it is.
         ├─ verdict ─► pass / swallow / hold / release   (what to do with this CGEvent)
         │
         └─ effects ─► armTimer / disarmTimer
-                      beginSelection ─► SelectionOverlayWindow.show()
+                      beginSelection(mode) ─► SelectionOverlayWindow.show()
                       updateSelection ─► overlay.setSelection(cgRect:)
-                      commitSelection ─► ScreenCapturer.capture(...) ─► Clipboard.write(...)
+                      commitSelection(.screenshot) ─► ScreenCapturer.capture(...) ─► Clipboard.write(...)
+                      commitSelection(.recording)  ─► RecordingController.start(...) ─► ScreenRecorder
                       cancelSelection ─► overlay.dismiss()
 ```
 
-Everything runs on the main actor. The tap's run loop source is attached to the
-main run loop, the hold timer is a `DispatchWorkItem` on the main queue, and
-AppKit is main-thread only anyway. There is no shared mutable state across threads.
+The modifiers held at mouse-down decide the `CaptureMode`. Shift (on top of any
+configured trigger modifier) means `.recording`. The recognizer carries the mode
+from `pending` through `selecting` to `commitSelection`, so it cannot change mid-gesture
+if the user lets go of Shift while dragging.
+
+The gesture pipeline and all UI run on the main actor. The tap's run loop source
+is attached to the main run loop, the hold timer is a `DispatchWorkItem` on the
+main queue, and AppKit is main-thread only anyway.
+
+The one exception is `ScreenRecorder`. It receives sample buffers and drives
+`AVAssetWriter` on its own serial queue (`dev.holdpicker.recorder`), and all of
+its mutable state is confined to that queue. It talks back to the main actor only
+through `onUnexpectedStop`, dispatched to the main queue.
 
 ## Hold-and-replay
 
@@ -56,17 +67,24 @@ The user-visible cost is that a plain click registers on release instead of on
 press, a few tens of milliseconds later. Double-clicks keep working because the
 replayed copy preserves the original click count.
 
-The recognizer itself (`HoldShotCore/HoldGestureRecognizer.swift`) is a pure
+The recognizer itself (`HoldPickerCore/HoldGestureRecognizer.swift`) is a pure
 state machine. It owns no timer and touches no I/O; it just returns what should
 happen. That is what makes it unit-testable without a window server.
 
 ```
  idle ──down──► pending ──timeout──► selecting ──up──► idle
-                  │  │                   │
-                  │  └──up/move────► (replay) ──► passthrough ──up──► idle
+                  │  │  │
+                  │  │  └──up──► (replay down + up) ──► idle
+                  │  └──move > tolerance──► (replay down + drag) ──► passthrough ──up──► idle
                   │
-                  └──(modifier missing)──► pass, stay idle
+                  └──(trigger modifier missing, or recording busy)──► pass, stay idle
 ```
+
+If macOS disables the event tap (it does so when a callback is too slow), events
+are lost while it is off. `EventTap` re-enables itself and calls `onReenabled`;
+the controller then abandons any gesture in progress. The held mouse-down is
+dropped rather than replayed, because its mouse-up may already have gone through
+and a lone replayed mouse-down would leave the button stuck in the target app.
 
 ## Coordinate systems
 
@@ -88,6 +106,47 @@ Retina is handled by asking the content filter for its `pointPixelScale` and
 requesting an output size of `points × scale`. The bitmap written to the
 pasteboard has its `size` set back to points so it pastes at 1:1.
 
+## Recording
+
+`ScreenRecorder` is a straight pipe with no intermediate buffering:
+
+```
+ SCStream (region, 30 fps, BGRA + 48 kHz PCM)
+        │  CMSampleBuffer on a private serial queue
+        ▼
+ AVAssetWriter (.mp4)
+        ├─ video input: HEVC, bitrate from VideoEncodingPlan
+        └─ audio input: AAC 128 kbps
+```
+
+Details worth knowing:
+
+- **Size and bitrate** come from `HoldPickerCore/VideoEncodingPlan`: native pixels
+  (points × backing scale), rounded down to even dimensions for 4:2:0 encoding,
+  and `0.04 bits/pixel/frame` clamped to 1.5–6 Mbps. Pure and unit-tested.
+- **Session timing.** The writer session starts at the first *complete* video
+  frame; idle/blank status buffers from ScreenCaptureKit are skipped, and audio
+  before that instant is dropped so tracks start together.
+- **Static screens.** ScreenCaptureKit only delivers frames when pixels change. On
+  stop, the last frame is re-stamped at "now" so the video lasts as long as the
+  recording the user saw. "Now" is expressed in the stream's clock via an offset
+  measured at the first frame, so no assumption is made about which clock the
+  stream uses.
+- **Own UI excluded.** `CaptureFilter` excludes every window owned by our process
+  (matched by PID, so `swift run` works too). The outline, pill and overlay never
+  appear in output, and screenshots taken during a recording are clean as well.
+- **One at a time.** While `RecordingController.isBusy`, the controller hands the
+  recognizer `allowsRecording = false`, so ⇧ + Hold passes through as a normal press.
+- **Never lose a file.** `applicationShouldTerminate` returns `.terminateLater`
+  while busy and replies once the file is finalized. If the stream dies on its own
+  (display unplugged, permission revoked) the delegate triggers the same stop path,
+  so whatever was captured is saved.
+- **Never leave junk.** `startWriting` creates the file, so it runs only after
+  everything that can throw during setup; if `startCapture` then fails, the file is
+  discarded. If the writer fails mid-recording (disk full, encoder error), the
+  failure is reported at once instead of the timer silently running on, and the
+  unplayable partial file is removed.
+
 ## Overlay
 
 `SelectionOverlayWindow` is a borderless, transparent, click-through window at
@@ -101,9 +160,10 @@ visible over any background, and a `CATextLayer` shows the size. Updating the
 selection only moves layer frames inside a transaction with implicit animations
 disabled, so it stays smooth at high pointer report rates.
 
-The overlay window is passed to ScreenCaptureKit as an excluded window, so the
-capture never contains the dimming or the frame even though the flash animation
-is still on screen while the capture runs.
+Our whole process is excluded from capture (see `CaptureFilter`), so the
+result never contains the dimming or the frame even though the flash animation
+is still on screen while the capture runs. In recording mode the frame is red
+and the label carries a REC prefix.
 
 ## Permissions
 
@@ -122,21 +182,27 @@ identity.
 
 | Path                                      | Responsibility                                                         |
 |-------------------------------------------|------------------------------------------------------------------------|
-| `HoldShotCore/HoldGestureRecognizer.swift`| Gesture state machine. Pure, tested.                                   |
-| `HoldShotCore/Geometry.swift`             | Rect normalization and clamping helpers.                               |
-| `HoldShot/App/HoldShotApp.swift`          | `@main` entry; sets accessory activation policy.                       |
-| `HoldShot/App/AppDelegate.swift`          | Wires controller and menu; handles termination.                        |
-| `HoldShot/App/StatusBarController.swift`  | Menu bar item, all user-facing settings.                               |
-| `HoldShot/Capture/EventTap.swift`         | `CGEvent` tap wrapper; re-enables itself after timeouts.               |
-| `HoldShot/Capture/CGEvent+Replay.swift`   | Synthetic marker and HID-level replay.                                 |
-| `HoldShot/Capture/CaptureController.swift`| Orchestrates tap, recognizer, timer, overlay, capture, clipboard.      |
-| `HoldShot/Capture/ScreenCapturer.swift`   | ScreenCaptureKit region capture.                                       |
-| `HoldShot/Capture/Clipboard.swift`        | Writes PNG + TIFF to the general pasteboard.                           |
-| `HoldShot/Overlay/*`                      | Selection window and layer-based view.                                 |
-| `HoldShot/Support/Preferences.swift`      | `UserDefaults`-backed settings.                                        |
-| `HoldShot/Support/Permissions.swift`      | Accessibility and Screen Recording checks and deep links.              |
-| `HoldShot/Support/ScreenGeometry.swift`   | CG ↔ Cocoa conversions, display lookup.                                |
-| `HoldShot/Support/Log.swift`              | `os.Logger` categories.                                                |
+| `HoldPickerCore/HoldGestureRecognizer.swift`| Gesture state machine. Pure, tested.                                   |
+| `HoldPickerCore/Geometry.swift`             | Rect normalization and clamping helpers.                               |
+| `HoldPicker/App/HoldPickerApp.swift`          | `@main` entry; sets accessory activation policy.                       |
+| `HoldPicker/App/AppDelegate.swift`          | Wires controller and menu; handles termination.                        |
+| `HoldPicker/App/StatusBarController.swift`  | Menu bar item, all user-facing settings.                               |
+| `HoldPicker/Capture/EventTap.swift`         | `CGEvent` tap wrapper; re-enables itself after timeouts.               |
+| `HoldPicker/Capture/CGEvent+Replay.swift`   | Synthetic marker and HID-level replay.                                 |
+| `HoldPicker/Capture/CaptureController.swift`| Orchestrates tap, recognizer, timer, overlay, capture, clipboard.      |
+| `HoldPicker/Capture/CaptureFilter.swift`    | Shared `SCContentFilter` that excludes our own windows; rect conversion. |
+| `HoldPicker/Capture/ScreenCapturer.swift`   | ScreenCaptureKit region screenshot.                                    |
+| `HoldPickerCore/VideoEncodingPlan.swift`    | Output pixel size and bitrate for a recording. Pure, tested.           |
+| `HoldPicker/Recording/ScreenRecorder.swift` | `SCStream` → `AVAssetWriter` region recording to MP4.                  |
+| `HoldPicker/Recording/RecordingController.swift` | Recording lifecycle, file naming, quit-safety.                    |
+| `HoldPicker/Recording/RecordingHUD.swift`   | Floating stop pill: timer, saving, saved (reveal in Finder).           |
+| `HoldPicker/Recording/RecordingFrameWindow.swift` | Dashed outline around the recorded region.                       |
+| `HoldPicker/Capture/Clipboard.swift`        | Writes PNG + TIFF to the general pasteboard.                           |
+| `HoldPicker/Overlay/*`                      | Selection window and layer-based view.                                 |
+| `HoldPicker/Support/Preferences.swift`      | `UserDefaults`-backed settings.                                        |
+| `HoldPicker/Support/Permissions.swift`      | Accessibility and Screen Recording checks and deep links.              |
+| `HoldPicker/Support/ScreenGeometry.swift`   | CG ↔ Cocoa conversions, display lookup.                                |
+| `HoldPicker/Support/Log.swift`              | `os.Logger` categories.                                                |
 
 ## Extending
 

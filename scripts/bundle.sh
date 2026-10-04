@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Builds HoldShot with SwiftPM and wraps the binary in a minimal .app bundle.
+# Builds HoldPicker with SwiftPM and wraps the binary in a minimal .app bundle.
 #
 # Usage:
-#   scripts/bundle.sh                 # release build -> build/HoldShot.app
+#   scripts/bundle.sh                 # release build -> build/HoldPicker.app
 #   CONFIG=debug scripts/bundle.sh    # debug build
 #   SIGN_IDENTITY="Apple Development: ..." scripts/bundle.sh
+#   UNIVERSAL=1 scripts/bundle.sh     # arm64 + x86_64 (needs full Xcode)
 #
 # Why a bundle? macOS privacy permissions (Accessibility, Screen Recording) are
 # granted per app identity. A bare binary works, but a bundle with a stable
@@ -18,15 +19,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="HoldShot"
+APP_NAME="HoldPicker"
 CONFIG="${CONFIG:-release}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+ARCH_FLAGS=()
+if [[ -n "${UNIVERSAL:-}" ]]; then
+    ARCH_FLAGS=(--arch arm64 --arch x86_64)
+fi
 OUT_DIR="$ROOT/build"
 APP="$OUT_DIR/$APP_NAME.app"
 
 echo "▸ Building ($CONFIG)…"
-swift build -c "$CONFIG" --package-path "$ROOT"
-BIN_DIR="$(swift build -c "$CONFIG" --package-path "$ROOT" --show-bin-path)"
+# `${arr[@]+...}` keeps bash 3.2 happy under `set -u` when the array is empty.
+swift build -c "$CONFIG" --package-path "$ROOT" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+BIN_DIR="$(swift build -c "$CONFIG" --package-path "$ROOT" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "▸ Assembling $APP"
 rm -rf "$APP"

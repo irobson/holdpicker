@@ -1,7 +1,10 @@
 import AppKit
+import HoldPickerCore
 import QuartzCore
 
 /// Draws the dimmed backdrop, the selection frame and the size label.
+/// Screenshot selections use a white frame; recording selections a red one
+/// with a "REC" prefix on the label, so the two modes are never confused.
 ///
 /// Everything is a `CALayer`, so updating the selection only moves a handful of
 /// layer frames; nothing is re-rasterised on each mouse move.
@@ -9,7 +12,9 @@ import QuartzCore
 final class SelectionOverlayView: NSView {
     private enum Style {
         static let dimColor = NSColor.black.withAlphaComponent(0.35).cgColor
-        static let borderColor = NSColor.white.cgColor
+        static func borderColor(for mode: CaptureMode) -> CGColor {
+            mode == .recording ? NSColor.systemRed.cgColor : NSColor.white.cgColor
+        }
         static let outlineColor = NSColor.black.withAlphaComponent(0.5).cgColor
         static let labelBackground = NSColor.black.withAlphaComponent(0.7).cgColor
         static let labelFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
@@ -23,12 +28,14 @@ final class SelectionOverlayView: NSView {
         didSet { layoutLayers() }
     }
 
+    private let mode: CaptureMode
     private let dimLayers: [CALayer] = (0..<4).map { _ in CALayer() }
     private let outlineLayer = CALayer()
     private let borderLayer = CALayer()
     private let labelLayer = CATextLayer()
 
-    override init(frame: NSRect) {
+    init(frame: NSRect, mode: CaptureMode) {
+        self.mode = mode
         super.init(frame: frame)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
@@ -43,8 +50,8 @@ final class SelectionOverlayView: NSView {
         outlineLayer.borderWidth = 1
         layer?.addSublayer(outlineLayer)
 
-        borderLayer.borderColor = Style.borderColor
-        borderLayer.borderWidth = 1
+        borderLayer.borderColor = Style.borderColor(for: mode)
+        borderLayer.borderWidth = mode == .recording ? 2 : 1
         layer?.addSublayer(borderLayer)
 
         labelLayer.font = Style.labelFont
@@ -78,12 +85,18 @@ final class SelectionOverlayView: NSView {
         defer { CATransaction.commit() }
 
         guard let selection, !selection.isEmpty else {
-            // No selection yet: dim everything, hide the frame.
+            // No selection yet: dim everything, hide the frame. In recording
+            // mode, show the REC label at the press point right away so the
+            // user knows Shift registered before they start dragging.
             dimLayers[0].frame = bounds
             for dim in dimLayers.dropFirst() { dim.frame = .zero }
             outlineLayer.frame = .zero
             borderLayer.frame = .zero
-            labelLayer.isHidden = true
+            if mode == .recording, let selection {
+                layoutLabel(for: selection)
+            } else {
+                labelLayer.isHidden = true
+            }
             return
         }
 
@@ -100,27 +113,28 @@ final class SelectionOverlayView: NSView {
     }
 
     private func layoutLabel(for selection: CGRect) {
-        let text = "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded()))"
+        let size = "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded()))"
+        let text = mode == .recording ? "● REC  \(size)" : size
         labelLayer.string = text
 
         let textSize = (text as NSString).size(withAttributes: [.font: Style.labelFont])
-        let size = CGSize(
+        let labelSize = CGSize(
             width: ceil(textSize.width) + Style.labelPadding * 2,
             height: ceil(textSize.height) + Style.labelPadding
         )
 
         // Prefer below the selection; go above when there is no room; fall
         // back to inside the selection when the frame is nearly full-screen.
-        var origin = CGPoint(x: selection.midX - size.width / 2, y: selection.minY - Style.labelGap - size.height)
+        var origin = CGPoint(x: selection.midX - labelSize.width / 2, y: selection.minY - Style.labelGap - labelSize.height)
         if origin.y < 0 {
             origin.y = selection.maxY + Style.labelGap
         }
-        if origin.y + size.height > bounds.maxY {
+        if origin.y + labelSize.height > bounds.maxY {
             origin.y = selection.minY + Style.labelGap
         }
-        origin.x = min(max(origin.x, 0), bounds.maxX - size.width)
+        origin.x = min(max(origin.x, 0), bounds.maxX - labelSize.width)
 
-        labelLayer.frame = CGRect(origin: origin, size: size)
+        labelLayer.frame = CGRect(origin: origin, size: labelSize)
         labelLayer.isHidden = false
     }
 

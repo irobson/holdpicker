@@ -1,8 +1,8 @@
 import AppKit
-import HoldShotCore
+import HoldPickerCore
 
 /// Orchestrates the whole pipeline: event tap → gesture recognizer → overlay →
-/// screen capture → clipboard.
+/// screenshot to clipboard, or region recording to disk.
 ///
 /// Everything runs on the main actor. The event tap callback, the hold timer and
 /// the overlay all live on the main run loop, so there is no cross-thread state.
@@ -19,6 +19,7 @@ final class CaptureController {
     private static let permissionRetryInterval: TimeInterval = 2
 
     private let preferences: Preferences
+    let recording: RecordingController
     private let recognizer: HoldGestureRecognizer
     private var tap: EventTap?
 
@@ -35,7 +36,16 @@ final class CaptureController {
 
     init(preferences: Preferences) {
         self.preferences = preferences
+        self.recording = RecordingController(preferences: preferences)
         self.recognizer = HoldGestureRecognizer(configuration: preferences.gestureConfiguration)
+    }
+
+    /// Settings snapshot for the recognizer. One recording at a time: while a
+    /// recording runs, the recording gesture is disabled but screenshots keep working.
+    private var currentGestureConfiguration: HoldGestureConfiguration {
+        var configuration = preferences.gestureConfiguration
+        configuration.allowsRecording = !recording.isBusy
+        return configuration
     }
 
     // MARK: - Lifecycle
@@ -58,11 +68,7 @@ final class CaptureController {
     func stop() {
         permissionRetryTimer?.invalidate()
         permissionRetryTimer = nil
-        holdTimer?.cancel()
-        holdTimer = nil
-        heldEvent = nil
-        dismissOverlay()
-        recognizer.reset()
+        resetGesture()
         tap?.stop()
         tap = nil
         status = .disabled
@@ -85,6 +91,10 @@ final class CaptureController {
                     return self.handle(type: type, event: event)
                 }
             )
+            tap?.onReenabled = { [weak self] in
+                Log.events.info("Event tap was disabled by the system; gesture reset")
+                self?.resetGesture()
+            }
         }
 
         do {
@@ -131,7 +141,7 @@ final class CaptureController {
         let input: PointerInput
         switch type {
         case .leftMouseDown:
-            recognizer.configuration = preferences.gestureConfiguration
+            recognizer.configuration = currentGestureConfiguration
             input = .down(event.location, modifiers: event.flags.rawValue)
         case .leftMouseDragged:
             input = .drag(event.location)
@@ -170,17 +180,28 @@ final class CaptureController {
             case .disarmTimer:
                 holdTimer?.cancel()
                 holdTimer = nil
-            case .beginSelection(let origin):
+            case .beginSelection(let origin, let mode):
                 heldEvent = nil
-                beginSelection(at: origin)
+                beginSelection(at: origin, mode: mode)
             case .updateSelection(let rect):
                 overlay?.setSelection(cgRect: clamp(rect))
-            case .commitSelection(let rect):
-                commitSelection(clamp(rect))
+            case .commitSelection(let rect, let mode):
+                commitSelection(clamp(rect), mode: mode)
             case .cancelSelection:
                 dismissOverlay()
             }
         }
+    }
+
+    /// Abandons any gesture in progress. The held mouse-down is dropped, not
+    /// replayed: its mouse-up may already have gone through, and replaying a
+    /// lone mouse-down would leave the button stuck in the target app.
+    private func resetGesture() {
+        holdTimer?.cancel()
+        holdTimer = nil
+        heldEvent = nil
+        dismissOverlay()
+        recognizer.reset()
     }
 
     private func armHoldTimer(after duration: TimeInterval) {
@@ -198,10 +219,10 @@ final class CaptureController {
 
     // MARK: - Selection
 
-    private func beginSelection(at origin: CGPoint) {
+    private func beginSelection(at origin: CGPoint, mode: CaptureMode) {
         dismissOverlay()
         guard let screen = ScreenGeometry.screen(containingCG: origin) else { return }
-        let window = SelectionOverlayWindow(screen: screen)
+        let window = SelectionOverlayWindow(screen: screen, mode: mode)
         window.setSelection(cgRect: CGRect(origin: origin, size: .zero))
         window.show()
         overlay = window
@@ -213,7 +234,7 @@ final class CaptureController {
         return rect.clamped(to: overlay.cgFrame)
     }
 
-    private func commitSelection(_ rect: CGRect) {
+    private func commitSelection(_ rect: CGRect, mode: CaptureMode) {
         guard let overlay else { return }
         self.overlay = nil
 
@@ -223,20 +244,25 @@ final class CaptureController {
             return
         }
 
-        let displayID = ScreenGeometry.displayID(of: overlay.targetScreen)
-        let overlayWindowID = CGWindowID(overlay.windowNumber)
+        switch mode {
+        case .screenshot:
+            takeScreenshot(rect, overlay: overlay)
+        case .recording:
+            overlay.dismiss()
+            recording.start(rect: rect, on: overlay.targetScreen)
+        }
+    }
 
-        // The flash gives instant feedback while the capture runs. The overlay
-        // window is excluded from the capture, so it never shows in the result.
+    private func takeScreenshot(_ rect: CGRect, overlay: SelectionOverlayWindow) {
+        let displayID = ScreenGeometry.displayID(of: overlay.targetScreen)
+
+        // The flash gives instant feedback while the capture runs. All of our
+        // windows are excluded from the capture, so it never shows in the result.
         overlay.flashThenDismiss()
 
         Task { @MainActor [preferences] in
             do {
-                let image = try await ScreenCapturer.capture(
-                    rect: rect,
-                    displayID: displayID,
-                    excludingWindowIDs: [overlayWindowID]
-                )
+                let image = try await ScreenCapturer.capture(rect: rect, displayID: displayID)
                 Clipboard.write(image, pointSize: rect.size)
                 if preferences.playsSound {
                     NSSound(named: "Pop")?.play()

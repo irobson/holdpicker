@@ -22,4 +22,5 @@ if [[ "$DEV_DIR" == *CommandLineTools* ]]; then
     )
 fi
 
-exec swift test --package-path "$ROOT" "${EXTRA_FLAGS[@]}" "$@"
+# `${arr[@]+...}` keeps bash 3.2 (macOS /bin/bash) happy under `set -u` when the array is empty.
+exec swift test --package-path "$ROOT" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} "$@"

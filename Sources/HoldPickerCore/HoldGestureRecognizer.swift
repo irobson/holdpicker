@@ -1,6 +1,14 @@
 import CoreGraphics
 import Foundation
 
+/// What a completed gesture produces.
+public enum CaptureMode: Equatable, Sendable {
+    /// A still image copied to the clipboard.
+    case screenshot
+    /// A video (with system audio) of the region, saved to disk.
+    case recording
+}
+
 /// A pointer event as seen by the recognizer.
 ///
 /// Points are in whatever coordinate space the caller uses. The recognizer only
@@ -35,9 +43,9 @@ public enum Verdict: Equatable {
 public enum Effect: Equatable {
     case armTimer(TimeInterval)
     case disarmTimer
-    case beginSelection(origin: CGPoint)
+    case beginSelection(origin: CGPoint, mode: CaptureMode)
     case updateSelection(CGRect)
-    case commitSelection(CGRect)
+    case commitSelection(CGRect, mode: CaptureMode)
     case cancelSelection
 }
 
@@ -52,6 +60,9 @@ public struct Response: Equatable {
 }
 
 public struct HoldGestureConfiguration: Equatable {
+    /// Raw `CGEventFlags.maskShift`.
+    public static let shiftModifier: UInt64 = 1 << 17
+
     /// How long the button must stay pressed, without moving, to enter selection mode.
     public var holdDuration: TimeInterval
     /// Movement (in points) tolerated during the hold before it counts as a normal drag.
@@ -59,11 +70,33 @@ public struct HoldGestureConfiguration: Equatable {
     /// Modifier flags (raw `CGEventFlags`) that must all be held for the gesture to arm.
     /// `0` means a plain press is enough.
     public var requiredModifiers: UInt64
+    /// Extra modifier that switches the gesture from screenshot to recording.
+    /// `0` disables recording entirely.
+    public var recordingModifier: UInt64
+    /// When `false`, a press carrying `recordingModifier` is ignored (passed through).
+    /// Used while a recording is already running.
+    public var allowsRecording: Bool
 
-    public init(holdDuration: TimeInterval = 0.35, moveTolerance: CGFloat = 4, requiredModifiers: UInt64 = 0) {
+    public init(
+        holdDuration: TimeInterval = 0.35,
+        moveTolerance: CGFloat = 4,
+        requiredModifiers: UInt64 = 0,
+        recordingModifier: UInt64 = HoldGestureConfiguration.shiftModifier,
+        allowsRecording: Bool = true
+    ) {
         self.holdDuration = holdDuration
         self.moveTolerance = moveTolerance
         self.requiredModifiers = requiredModifiers
+        self.recordingModifier = recordingModifier
+        self.allowsRecording = allowsRecording
+    }
+
+    /// Decides which mode a press starts, or `nil` if the press is not a gesture candidate.
+    func mode(for modifiers: UInt64) -> CaptureMode? {
+        guard modifiers & requiredModifiers == requiredModifiers else { return nil }
+        let wantsRecording = recordingModifier != 0 && modifiers & recordingModifier == recordingModifier
+        guard wantsRecording else { return .screenshot }
+        return allowsRecording ? .recording : nil
     }
 }
 
@@ -75,17 +108,20 @@ public struct HoldGestureConfiguration: Equatable {
 /// never notices. If the timer fires first, the app owns the pointer until
 /// the button is released, and the resulting rectangle is reported.
 ///
+/// The modifiers held at mouse-down pick the mode: plain press for a screenshot,
+/// with the recording modifier (Shift by default) for a screen recording.
+///
 /// This type is pure: it performs no I/O and owns no timer. The caller applies
 /// the returned `Verdict` and `Effect`s. That keeps it trivially testable.
 public final class HoldGestureRecognizer {
     public enum State: Equatable {
         case idle
         /// Button is down, timer armed, waiting to see whether this is a hold.
-        case pending(origin: CGPoint)
+        case pending(origin: CGPoint, mode: CaptureMode)
         /// A normal click or drag is in progress; events flow untouched until mouse-up.
         case passthrough
         /// The overlay is up and the user is dragging out a rectangle.
-        case selecting(origin: CGPoint)
+        case selecting(origin: CGPoint, mode: CaptureMode)
     }
 
     public private(set) var state: State = .idle
@@ -105,17 +141,17 @@ public final class HoldGestureRecognizer {
 
         // MARK: idle
         case let (.idle, .down(point, modifiers)):
-            guard modifiers & configuration.requiredModifiers == configuration.requiredModifiers else {
+            guard let mode = configuration.mode(for: modifiers) else {
                 return Response(.pass)
             }
-            state = .pending(origin: point)
+            state = .pending(origin: point, mode: mode)
             return Response(.hold, [.armTimer(configuration.holdDuration)])
 
         case (.idle, _):
             return Response(.pass)
 
         // MARK: pending
-        case let (.pending(origin), .drag(point)):
+        case let (.pending(origin, _), .drag(point)):
             if origin.distance(to: point) > configuration.moveTolerance {
                 state = .passthrough
                 return Response(.release, [.disarmTimer])
@@ -126,9 +162,9 @@ public final class HoldGestureRecognizer {
             state = .idle
             return Response(.release, [.disarmTimer])
 
-        case let (.pending(origin), .holdTimeout):
-            state = .selecting(origin: origin)
-            return Response(.swallow, [.beginSelection(origin: origin)])
+        case let (.pending(origin, mode), .holdTimeout):
+            state = .selecting(origin: origin, mode: mode)
+            return Response(.swallow, [.beginSelection(origin: origin, mode: mode)])
 
         case (.pending, .down), (.pending, .cancel):
             // A second press without a release cannot happen; a cancel while
@@ -144,12 +180,12 @@ public final class HoldGestureRecognizer {
             return Response(.pass)
 
         // MARK: selecting
-        case let (.selecting(origin), .drag(point)):
+        case let (.selecting(origin, _), .drag(point)):
             return Response(.swallow, [.updateSelection(CGRect(corner: origin, opposite: point))])
 
-        case let (.selecting(origin), .up(point)):
+        case let (.selecting(origin, mode), .up(point)):
             state = .idle
-            return Response(.swallow, [.commitSelection(CGRect(corner: origin, opposite: point))])
+            return Response(.swallow, [.commitSelection(CGRect(corner: origin, opposite: point), mode: mode)])
 
         case (.selecting, .cancel):
             state = .idle

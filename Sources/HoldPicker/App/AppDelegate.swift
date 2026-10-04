@@ -11,7 +11,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureController = capture
         statusBar = StatusBarController(captureController: capture, preferences: preferences)
         capture.start()
-        Log.app.info("HoldShot launched")
+        Log.app.info("HoldPicker launched")
+    }
+
+    /// Never lose a recording on quit: stop it, wait for the file, then exit.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let recording = captureController?.recording, recording.isBusy else {
+            return .terminateNow
+        }
+        recording.finish {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {

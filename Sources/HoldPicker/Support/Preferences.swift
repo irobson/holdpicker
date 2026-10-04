@@ -1,13 +1,13 @@
 import CoreGraphics
 import Foundation
-import HoldShotCore
+import HoldPickerCore
 
 /// User-facing settings, persisted in `UserDefaults`.
 ///
 /// Every property reads through to defaults on access, so the menu and the
 /// capture pipeline always agree without an observer layer. Override from the
 /// shell with, for example:
-///   defaults write dev.holdshot.HoldShot holdDuration -float 0.5
+///   defaults write dev.holdpicker.HoldPicker holdDuration -float 0.5
 final class Preferences {
     static let shared = Preferences()
 
@@ -17,6 +17,8 @@ final class Preferences {
         static let moveTolerance = "moveTolerance"
         static let requiredModifiers = "requiredModifiers"
         static let playsSound = "playsSound"
+        static let recordsSystemAudio = "recordsSystemAudio"
+        static let recordingsFolder = "recordingsFolder"
     }
 
     private let defaults: UserDefaults
@@ -44,10 +46,11 @@ final class Preferences {
     }
 
     /// Modifier keys that must be held together with the press. Empty means none.
+    /// Shift is reserved for switching to recording, so it is never part of the trigger.
     var requiredModifiers: CGEventFlags {
         get {
             let raw = defaults.object(forKey: Key.requiredModifiers) as? Int ?? 0
-            return CGEventFlags(rawValue: UInt64(raw))
+            return CGEventFlags(rawValue: UInt64(raw)).subtracting(.maskShift)
         }
         set { defaults.set(Int(newValue.rawValue), forKey: Key.requiredModifiers) }
     }
@@ -58,12 +61,30 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.playsSound) }
     }
 
+    /// Capture system audio (what you hear) together with the video.
+    var recordsSystemAudio: Bool {
+        get { defaults.object(forKey: Key.recordsSystemAudio) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.recordsSystemAudio) }
+    }
+
+    /// Where recordings are saved. Defaults to `~/Movies/HoldPicker`.
+    var recordingsFolder: URL {
+        get {
+            guard let path = defaults.string(forKey: Key.recordingsFolder), !path.isEmpty else {
+                return RecordingStorage.defaultFolder
+            }
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        set { defaults.set(newValue.path, forKey: Key.recordingsFolder) }
+    }
+
     /// Snapshot of the gesture-related settings for the recognizer.
     var gestureConfiguration: HoldGestureConfiguration {
         HoldGestureConfiguration(
             holdDuration: holdDuration,
             moveTolerance: moveTolerance,
-            requiredModifiers: requiredModifiers.rawValue
+            requiredModifiers: requiredModifiers.rawValue,
+            recordingModifier: CGEventFlags.maskShift.rawValue
         )
     }
 }

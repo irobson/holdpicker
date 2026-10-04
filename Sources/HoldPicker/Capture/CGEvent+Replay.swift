@@ -1,7 +1,7 @@
 import CoreGraphics
 
 extension CGEvent {
-    /// Written into `eventSourceUserData` on every event HoldShot injects, so the
+    /// Written into `eventSourceUserData` on every event HoldPicker injects, so the
     /// tap can recognise its own events and let them through untouched.
     /// Real HID events carry `0` here.
     private static let syntheticMarker: Int64 = 0x484F_4C44 // "HOLD"
