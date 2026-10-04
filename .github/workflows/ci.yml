@@ -39,20 +39,20 @@ jobs:
 
       - name: Verify bundle
         run: |
-          plutil -lint build/HoldPicker.app/Contents/Info.plist
-          codesign --verify --strict --verbose=2 build/HoldPicker.app
-          lipo -archs build/HoldPicker.app/Contents/MacOS/HoldPicker
-          lipo build/HoldPicker.app/Contents/MacOS/HoldPicker -verify_arch arm64 x86_64
+          plutil -lint build/TedCat.app/Contents/Info.plist
+          codesign --verify --strict --verbose=2 build/TedCat.app
+          lipo -archs build/TedCat.app/Contents/MacOS/TedCat
+          lipo build/TedCat.app/Contents/MacOS/TedCat -verify_arch arm64 x86_64
 
       - name: Package
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/HoldPicker.app HoldPicker.zip
-          ls -lh HoldPicker.zip
+          ditto -c -k --sequesterRsrc --keepParent build/TedCat.app TedCat.zip
+          ls -lh TedCat.zip
 
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:
-          name: HoldPicker-${{ github.sha }}
-          path: HoldPicker.zip
+          name: TedCat-${{ github.sha }}
+          path: TedCat.zip
           retention-days: 30
           if-no-files-found: error

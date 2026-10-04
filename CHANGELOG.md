@@ -6,22 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Audio-only recording from the menu (**Record Audio Only**): records the computer's audio, for example the other people in a call, to an M4A.
 - Region screen recording: Shift + hold, drag, release to start recording; click the floating pill to stop.
-- Recordings saved automatically as MP4 (HEVC video at native resolution, AAC system audio) to `~/Movies/HoldPicker`.
+- Recordings saved automatically as MP4 (HEVC video at native resolution, AAC system audio) to `~/Movies/TedCat`.
 - Dashed outline around the recorded region and a timer pill placed in the corner farthest from it.
-- Menu items: Stop Recording, Record System Audio, Open Recordings Folder, Change Recordings Folder.
+- Menu items: Record Audio Only, Stop Recording, Include System Audio in Videos, Open Recordings Folder, Change Recordings Folder.
+- The menu lists the two gestures, adapted to the chosen trigger modifier.
 - Quitting while recording finalizes the file before exiting.
+- After a recording is saved, a card in the same corner shows the file name, folder, size and length with a thumbnail. Click to play, drag the thumbnail into another app, or reveal it in Finder.
 - GitHub Actions CI: tests, a universal (arm64 + x86_64) release bundle and a downloadable zipped app on every push.
-- `make install`, which copies the last bundle to `/Applications` without rebuilding.
+- `make install`, which copies the last bundle to `/Applications` without rebuilding and without launching it, and prints the steps to grant permissions safely.
 
 ### Fixed
 - A gesture in progress is abandoned when macOS disables and re-enables the event tap, instead of leaving a stale overlay that captures the next click.
 - `scripts/test.sh` no longer aborts under `set -u` on macOS's bash 3.2 when Xcode is the selected toolchain.
 
 ### Changed
-- Renamed the app from HoldShot to HoldPicker (bundle identifier `dev.holdpicker.HoldPicker`).
+- Renamed the app from HoldShot to TedCat (bundle identifier `dev.tedcat.TedCat`), after Ted, the cat on the icon. Recordings now go to `~/Movies/TedCat`.
+- App icon and menu bar glyph featuring Ted, generated into every required size at bundle time. While recording, the glyph's camera-lens eye turns red.
 - Shift is reserved for recording and removed from the trigger options.
-- HoldPicker's own windows are excluded from every capture, so screenshots taken while recording are clean.
+- TedCat's own windows are excluded from every capture, so screenshots taken while recording are clean.
 
 ## [0.1.0] - 2026-09-22
 

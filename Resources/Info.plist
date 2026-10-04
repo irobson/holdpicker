@@ -5,15 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>HoldPicker</string>
+    <string>TedCat</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.holdpicker.HoldPicker</string>
+    <string>dev.tedcat.TedCat</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>HoldPicker</string>
+    <string>TedCat</string>
     <key>CFBundleDisplayName</key>
-    <string>HoldPicker</string>
+    <string>TedCat</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

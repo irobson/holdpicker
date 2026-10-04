@@ -1,5 +1,5 @@
 import AppKit
-import HoldPickerCore
+import TedCatCore
 
 /// Orchestrates the whole pipeline: event tap → gesture recognizer → overlay →
 /// screenshot to clipboard, or region recording to disk.
@@ -238,18 +238,24 @@ final class CaptureController {
         guard let overlay else { return }
         self.overlay = nil
 
-        guard rect.width >= Self.minimumSelectionSize, rect.height >= Self.minimumSelectionSize else {
-            overlay.dismiss()
-            Log.capture.debug("Selection too small, ignored")
-            return
-        }
-
         switch mode {
         case .screenshot:
+            guard rect.width >= Self.minimumSelectionSize, rect.height >= Self.minimumSelectionSize else {
+                overlay.dismiss()
+                Log.capture.debug("Selection too small, ignored")
+                return
+            }
             takeScreenshot(rect, overlay: overlay)
         case .recording:
+            // The gesture only records dragged regions; audio-only is in the menu.
             overlay.dismiss()
-            recording.start(rect: rect, on: overlay.targetScreen)
+            let screen = overlay.targetScreen
+            let target = RecordingTarget(selection: rect, scale: screen.backingScaleFactor)
+            guard target != .tooSmall else {
+                Log.capture.debug("Recording selection too small to film, ignored")
+                return
+            }
+            recording.start(target: target, on: screen)
         }
     }
 

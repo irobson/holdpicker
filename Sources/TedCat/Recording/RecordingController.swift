@@ -1,4 +1,5 @@
 import AppKit
+import TedCatCore
 
 /// Owns one recording at a time: the recorder, the frame around the region
 /// and the floating stop control.
@@ -15,6 +16,9 @@ final class RecordingController {
     private var recorder: ScreenRecorder?
     private var frameWindow: RecordingFrameWindow?
     private var hud: RecordingHUD?
+    /// Where the current recording happens and what it captures; used for the saved card.
+    private var recordingDisplayID: CGDirectDisplayID?
+    private var recordingIsAudioOnly = false
 
     private(set) var state: State = .idle {
         didSet { if state != oldValue { onStateChange?(state) } }
@@ -31,16 +35,23 @@ final class RecordingController {
     // MARK: - Start
 
     /// - Parameters:
-    ///   - rect: Region in global CG coordinates.
-    ///   - screen: The screen the region lives on.
-    func start(rect: CGRect, on screen: NSScreen) {
+    ///   - target: A region in global CG coordinates, or audio only.
+    ///   - screen: The screen the region lives on, or where the gesture happened.
+    func start(target: RecordingTarget, on screen: NSScreen) {
         guard state == .idle else { return }
         state = .starting
 
-        let displayID = ScreenGeometry.displayID(of: screen)
+        // Audio-only films nothing, so it uses the display least likely to
+        // disappear mid-meeting (the built-in one) rather than where the gesture was.
+        let displayID = target.isAudioOnly
+            ? ScreenGeometry.stableDisplayID()
+            : ScreenGeometry.displayID(of: screen)
         let url: URL
         do {
-            url = try RecordingStorage.newFileURL(in: preferences.recordingsFolder)
+            url = try RecordingStorage.newFileURL(
+                in: preferences.recordingsFolder,
+                fileExtension: target.isAudioOnly ? "m4a" : "mp4"
+            )
         } catch {
             fail(error)
             return
@@ -51,28 +62,39 @@ final class RecordingController {
         Task { @MainActor in
             do {
                 let recorder = try await ScreenRecorder.start(
-                    rect: rect,
+                    target: target,
                     displayID: displayID,
                     outputURL: url,
                     options: options
                 )
                 recorder.onUnexpectedStop = { [weak self] _ in self?.stop() }
                 self.recorder = recorder
-                self.didStart(rect: rect, on: screen)
+                self.didStart(target: target, on: screen)
             } catch {
                 self.fail(error)
             }
         }
     }
 
-    private func didStart(rect: CGRect, on screen: NSScreen) {
+    /// Records system audio only, for example from the menu bar.
+    func startAudioOnly(on screen: NSScreen) {
+        start(target: .audioOnly, on: screen)
+    }
+
+    private func didStart(target: RecordingTarget, on screen: NSScreen) {
         let startDate = Date()
 
-        let frame = RecordingFrameWindow(cgRect: rect)
-        frame.show()
-        frameWindow = frame
+        var avoid = CGRect.zero
+        if case .region(let rect) = target {
+            let frame = RecordingFrameWindow(cgRect: rect)
+            frame.show()
+            frameWindow = frame
+            avoid = ScreenGeometry.cocoaRect(fromCG: rect)
+        }
 
-        let hud = RecordingHUD(avoiding: ScreenGeometry.cocoaRect(fromCG: rect), on: screen)
+        recordingDisplayID = ScreenGeometry.displayID(of: screen)
+        recordingIsAudioOnly = target.isAudioOnly
+        let hud = RecordingHUD(avoiding: avoid, on: screen, audioOnly: target.isAudioOnly)
         hud.onStop = { [weak self] in self?.stop() }
         hud.showRecording(since: startDate)
         self.hud = hud
@@ -96,11 +118,24 @@ final class RecordingController {
         hud?.showSaving()
         playSound("Pop")
 
+        let displayID = recordingDisplayID
+        let audioOnly = recordingIsAudioOnly
+
         Task { @MainActor in
             do {
                 let url = try await recorder.stop()
-                Log.recording.info("Saved \(url.lastPathComponent, privacy: .public)")
-                hud?.showSaved(url)
+                Log.recording.notice("Saved \(url.path, privacy: .public)")
+                // The pill gives way to a card that says what was saved and where.
+                let anchor = hud?.frame
+                hud?.dismissNow()
+                // Look the screen up now: the display may have been unplugged
+                // during the recording, and a stale NSScreen keeps its old frame.
+                let screen = NSScreen.screens.first { ScreenGeometry.displayID(of: $0) == displayID }
+                    ?? anchor.flatMap { frame in NSScreen.screens.first { $0.frame.intersects(frame) } }
+                    ?? NSScreen.main
+                if let screen {
+                    SavedRecordingCard.show(fileURL: url, audioOnly: audioOnly, anchor: anchor, on: screen)
+                }
             } catch {
                 Log.recording.error("Saving failed: \(error.localizedDescription, privacy: .public)")
                 hud?.showFailure(error.localizedDescription)
@@ -155,22 +190,22 @@ enum RecordingStorage {
     static var defaultFolder: URL {
         let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies")
-        return movies.appendingPathComponent("HoldPicker", isDirectory: true)
+        return movies.appendingPathComponent("TedCat", isDirectory: true)
     }
 
-    /// `HoldPicker 2026-10-04 at 14.03.22.mp4`, matching macOS screenshot naming.
-    static func newFileURL(in folder: URL, date: Date = Date()) throws -> URL {
+    /// `TedCat 2026-10-04 at 14.03.22.mp4`, matching macOS screenshot naming.
+    static func newFileURL(in folder: URL, fileExtension: String, date: Date = Date()) throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let base = "HoldPicker \(formatter.string(from: date))"
+        let base = "TedCat \(formatter.string(from: date))"
 
-        var url = folder.appendingPathComponent(base).appendingPathExtension("mp4")
+        var url = folder.appendingPathComponent(base).appendingPathExtension(fileExtension)
         var counter = 2
         while FileManager.default.fileExists(atPath: url.path) {
-            url = folder.appendingPathComponent("\(base) (\(counter))").appendingPathExtension("mp4")
+            url = folder.appendingPathComponent("\(base) (\(counter))").appendingPathExtension(fileExtension)
             counter += 1
         }
         return url

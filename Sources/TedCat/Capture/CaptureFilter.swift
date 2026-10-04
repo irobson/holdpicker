@@ -14,7 +14,7 @@ enum CaptureFilter {
         }
     }
 
-    /// A filter for one display that leaves out every window HoldPicker owns:
+    /// A filter for one display that leaves out every window TedCat owns:
     /// the selection overlay, the recording frame and the recording controls.
     /// That keeps our own UI out of both screenshots and videos.
     static func display(_ displayID: CGDirectDisplayID) async throws -> (SCContentFilter, SCDisplay) {

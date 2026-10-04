@@ -1,5 +1,5 @@
 import AppKit
-import HoldPickerCore
+import TedCatCore
 import QuartzCore
 
 /// Draws the dimmed backdrop, the selection frame and the size label.
@@ -21,6 +21,8 @@ final class SelectionOverlayView: NSView {
         static let labelPadding: CGFloat = 6
         static let labelGap: CGFloat = 8
         static let flashDuration: CFTimeInterval = 0.18
+        static let recordHint = "● REC  ·  drag to select an area"
+        static let tooSmallHint = "too small to film"
     }
 
     /// Selection in this view's (Cocoa, bottom-left origin) coordinates.
@@ -84,17 +86,28 @@ final class SelectionOverlayView: NSView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        guard let selection, !selection.isEmpty else {
-            // No selection yet: dim everything, hide the frame. In recording
-            // mode, show the REC label at the press point right away so the
-            // user knows Shift registered before they start dragging.
+        // In recording mode the label always says what releasing now will do,
+        // using the same rule as the controller (RecordingTarget): nothing until
+        // the user drags, a region once it can be filmed, or "too small".
+        let scale = window?.backingScaleFactor ?? 2
+        let target = mode == .recording
+            ? selection.map { RecordingTarget(selection: $0, scale: scale) }
+            : nil
+        let undragged = selection.map(RecordingTarget.isUndragged) ?? true
+
+        guard let selection, !selection.isEmpty, !(mode == .recording && undragged) else {
+            // No area yet: dim everything, hide the frame.
             dimLayers[0].frame = bounds
             for dim in dimLayers.dropFirst() { dim.frame = .zero }
             outlineLayer.frame = .zero
             borderLayer.frame = .zero
-            if mode == .recording, let selection {
-                layoutLabel(for: selection)
-            } else {
+            switch (mode, selection) {
+            case (.recording, let selection?) where undragged:
+                // Shift registered: tell the user to drag, right at the press point.
+                layoutLabel(Style.recordHint, around: selection)
+            case (.recording, let selection?):
+                layoutLabel(Style.tooSmallHint, around: selection)
+            default:
                 labelLayer.isHidden = true
             }
             return
@@ -109,12 +122,18 @@ final class SelectionOverlayView: NSView {
         borderLayer.frame = selection
         outlineLayer.frame = selection.insetBy(dx: -1, dy: -1)
 
-        layoutLabel(for: selection)
+        let size = "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded()))"
+        switch target {
+        case .tooSmall?:
+            layoutLabel("\(size)  ·  \(Style.tooSmallHint)", around: selection)
+        case .region?:
+            layoutLabel("● REC  \(size)", around: selection)
+        default:
+            layoutLabel(size, around: selection)
+        }
     }
 
-    private func layoutLabel(for selection: CGRect) {
-        let size = "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded()))"
-        let text = mode == .recording ? "● REC  \(size)" : size
+    private func layoutLabel(_ text: String, around selection: CGRect) {
         labelLayer.string = text
 
         let textSize = (text as NSString).size(withAttributes: [.font: Style.labelFont])

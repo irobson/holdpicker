@@ -1,13 +1,13 @@
 import CoreGraphics
 import Foundation
-import HoldPickerCore
+import TedCatCore
 
 /// User-facing settings, persisted in `UserDefaults`.
 ///
 /// Every property reads through to defaults on access, so the menu and the
 /// capture pipeline always agree without an observer layer. Override from the
 /// shell with, for example:
-///   defaults write dev.holdpicker.HoldPicker holdDuration -float 0.5
+///   defaults write dev.tedcat.TedCat holdDuration -float 0.5
 final class Preferences {
     static let shared = Preferences()
 
@@ -67,7 +67,7 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.recordsSystemAudio) }
     }
 
-    /// Where recordings are saved. Defaults to `~/Movies/HoldPicker`.
+    /// Where recordings are saved. Defaults to `~/Movies/TedCat`.
     var recordingsFolder: URL {
         get {
             guard let path = defaults.string(forKey: Key.recordingsFolder), !path.isEmpty else {

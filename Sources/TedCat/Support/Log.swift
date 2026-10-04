@@ -1,9 +1,9 @@
 import os
 
 /// Unified logging. Read with:
-///   log stream --predicate 'subsystem == "dev.holdpicker.HoldPicker"' --level debug
+///   log stream --predicate 'subsystem == "dev.tedcat.TedCat"' --level debug
 enum Log {
-    static let subsystem = "dev.holdpicker.HoldPicker"
+    static let subsystem = "dev.tedcat.TedCat"
 
     static let app = Logger(subsystem: subsystem, category: "app")
     static let capture = Logger(subsystem: subsystem, category: "capture")

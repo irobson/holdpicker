@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureController = capture
         statusBar = StatusBarController(captureController: capture, preferences: preferences)
         capture.start()
-        Log.app.info("HoldPicker launched")
+        Log.app.info("TedCat launched")
     }
 
     /// Never lose a recording on quit: stop it, wait for the file, then exit.

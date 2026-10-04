@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import HoldPickerCore
+@testable import TedCatCore
 
 @Suite("VideoEncodingPlan")
 struct VideoEncodingPlanTests {

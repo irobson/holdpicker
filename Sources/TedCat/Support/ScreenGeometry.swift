@@ -34,6 +34,17 @@ enum ScreenGeometry {
         return NSScreen.screens.first { $0.frame.contains(cocoa) } ?? NSScreen.main
     }
 
+    /// The active built-in display if there is one (laptop lid open), else the
+    /// main display. Used when any display will do and staying connected matters.
+    static func stableDisplayID() -> CGDirectDisplayID {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else {
+            return CGMainDisplayID()
+        }
+        return ids.prefix(Int(count)).first { CGDisplayIsBuiltin($0) != 0 } ?? CGMainDisplayID()
+    }
+
     static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return (screen.deviceDescription[key] as? NSNumber).map { CGDirectDisplayID($0.uint32Value) } ?? CGMainDisplayID()

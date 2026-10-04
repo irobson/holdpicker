@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// The two macOS privacy grants HoldPicker depends on.
+/// The two macOS privacy grants TedCat depends on.
 ///
 /// - Accessibility: required to create an *active* event tap, one that can
 ///   swallow and re-inject mouse events.

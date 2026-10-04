@@ -1,6 +1,6 @@
 # Architecture
 
-HoldPicker is small on purpose. This document explains the parts that are not
+TedCat is small on purpose. This document explains the parts that are not
 obvious from reading the code top to bottom: the event interception trick, the
 coordinate systems, and why each module is where it is.
 
@@ -35,7 +35,7 @@ is attached to the main run loop, the hold timer is a `DispatchWorkItem` on the
 main queue, and AppKit is main-thread only anyway.
 
 The one exception is `ScreenRecorder`. It receives sample buffers and drives
-`AVAssetWriter` on its own serial queue (`dev.holdpicker.recorder`), and all of
+`AVAssetWriter` on its own serial queue (`dev.tedcat.recorder`), and all of
 its mutable state is confined to that queue. It talks back to the main actor only
 through `onUnexpectedStop`, dispatched to the main queue.
 
@@ -67,7 +67,7 @@ The user-visible cost is that a plain click registers on release instead of on
 press, a few tens of milliseconds later. Double-clicks keep working because the
 replayed copy preserves the original click count.
 
-The recognizer itself (`HoldPickerCore/HoldGestureRecognizer.swift`) is a pure
+The recognizer itself (`TedCatCore/HoldGestureRecognizer.swift`) is a pure
 state machine. It owns no timer and touches no I/O; it just returns what should
 happen. That is what makes it unit-testable without a window server.
 
@@ -108,6 +108,19 @@ pasteboard has its `size` set back to points so it pastes at 1:1.
 
 ## Recording
 
+What a gesture records is decided when it ends, by `RecordingTarget` in
+`TedCatCore`: the selection is a **region** if the encoder can take it (32 px
+per side, so 16 pt on Retina) and **too small** otherwise, in which case the
+release is ignored. The gesture never starts an audio-only recording; that is the
+**Record Audio Only** menu item. The overlay uses the same rule, with the
+display's scale: before the pointer has moved 10 points it shows a "drag to select
+an area" hint, then "REC w × h" or "too small to film", so the label always matches
+what releasing does.
+
+Audio-only recordings film nothing, so they attach the stream to the built-in
+display when there is one, rather than to the main screen. Unplugging an external
+monitor in the middle of a meeting then does not end the recording.
+
 `ScreenRecorder` is a straight pipe with no intermediate buffering:
 
 ```
@@ -119,14 +132,21 @@ pasteboard has its `size` set back to points so it pastes at 1:1.
         └─ audio input: AAC 128 kbps
 ```
 
+Audio-only recordings use the same stream with a 2×2, 1 fps picture whose frames
+are dropped on arrival (ScreenCaptureKit always needs a video configuration, and
+logs every frame that has no receiver). The writer then has a single AAC input
+and writes an `.m4a`; the session starts at the first audio sample and ends with
+the last one.
+
 Details worth knowing:
 
-- **Size and bitrate** come from `HoldPickerCore/VideoEncodingPlan`: native pixels
+- **Size and bitrate** come from `TedCatCore/VideoEncodingPlan`: native pixels
   (points × backing scale), rounded down to even dimensions for 4:2:0 encoding,
   and `0.04 bits/pixel/frame` clamped to 1.5–6 Mbps. Pure and unit-tested.
-- **Session timing.** The writer session starts at the first *complete* video
-  frame; idle/blank status buffers from ScreenCaptureKit are skipped, and audio
-  before that instant is dropped so tracks start together.
+- **Session timing.** For video, the writer session starts at the first *complete*
+  video frame; idle/blank status buffers from ScreenCaptureKit are skipped, and
+  audio before that instant is dropped so tracks start together. Audio-only
+  recordings start at the first audio sample.
 - **Static screens.** ScreenCaptureKit only delivers frames when pixels change. On
   stop, the last frame is re-stamped at "now" so the video lasts as long as the
   recording the user saw. "Now" is expressed in the stream's clock via an offset
@@ -182,27 +202,29 @@ identity.
 
 | Path                                      | Responsibility                                                         |
 |-------------------------------------------|------------------------------------------------------------------------|
-| `HoldPickerCore/HoldGestureRecognizer.swift`| Gesture state machine. Pure, tested.                                   |
-| `HoldPickerCore/Geometry.swift`             | Rect normalization and clamping helpers.                               |
-| `HoldPicker/App/HoldPickerApp.swift`          | `@main` entry; sets accessory activation policy.                       |
-| `HoldPicker/App/AppDelegate.swift`          | Wires controller and menu; handles termination.                        |
-| `HoldPicker/App/StatusBarController.swift`  | Menu bar item, all user-facing settings.                               |
-| `HoldPicker/Capture/EventTap.swift`         | `CGEvent` tap wrapper; re-enables itself after timeouts.               |
-| `HoldPicker/Capture/CGEvent+Replay.swift`   | Synthetic marker and HID-level replay.                                 |
-| `HoldPicker/Capture/CaptureController.swift`| Orchestrates tap, recognizer, timer, overlay, capture, clipboard.      |
-| `HoldPicker/Capture/CaptureFilter.swift`    | Shared `SCContentFilter` that excludes our own windows; rect conversion. |
-| `HoldPicker/Capture/ScreenCapturer.swift`   | ScreenCaptureKit region screenshot.                                    |
-| `HoldPickerCore/VideoEncodingPlan.swift`    | Output pixel size and bitrate for a recording. Pure, tested.           |
-| `HoldPicker/Recording/ScreenRecorder.swift` | `SCStream` → `AVAssetWriter` region recording to MP4.                  |
-| `HoldPicker/Recording/RecordingController.swift` | Recording lifecycle, file naming, quit-safety.                    |
-| `HoldPicker/Recording/RecordingHUD.swift`   | Floating stop pill: timer, saving, saved (reveal in Finder).           |
-| `HoldPicker/Recording/RecordingFrameWindow.swift` | Dashed outline around the recorded region.                       |
-| `HoldPicker/Capture/Clipboard.swift`        | Writes PNG + TIFF to the general pasteboard.                           |
-| `HoldPicker/Overlay/*`                      | Selection window and layer-based view.                                 |
-| `HoldPicker/Support/Preferences.swift`      | `UserDefaults`-backed settings.                                        |
-| `HoldPicker/Support/Permissions.swift`      | Accessibility and Screen Recording checks and deep links.              |
-| `HoldPicker/Support/ScreenGeometry.swift`   | CG ↔ Cocoa conversions, display lookup.                                |
-| `HoldPicker/Support/Log.swift`              | `os.Logger` categories.                                                |
+| `TedCatCore/HoldGestureRecognizer.swift`| Gesture state machine. Pure, tested.                                   |
+| `TedCatCore/Geometry.swift`             | Rect normalization and clamping helpers.                               |
+| `TedCat/App/TedCatApp.swift`          | `@main` entry; sets accessory activation policy.                       |
+| `TedCat/App/AppDelegate.swift`          | Wires controller and menu; handles termination.                        |
+| `TedCat/App/StatusBarController.swift`  | Menu bar item, all user-facing settings, and `StatusIcon`: Ted's template glyph, redrawn with a red lens while recording. |
+| `TedCat/Capture/EventTap.swift`         | `CGEvent` tap wrapper; re-enables itself after timeouts.               |
+| `TedCat/Capture/CGEvent+Replay.swift`   | Synthetic marker and HID-level replay.                                 |
+| `TedCat/Capture/CaptureController.swift`| Orchestrates tap, recognizer, timer, overlay, capture, clipboard.      |
+| `TedCat/Capture/CaptureFilter.swift`    | Shared `SCContentFilter` that excludes our own windows; rect conversion. |
+| `TedCat/Capture/ScreenCapturer.swift`   | ScreenCaptureKit region screenshot.                                    |
+| `TedCatCore/VideoEncodingPlan.swift`    | Output pixel size and bitrate for a recording. Pure, tested.           |
+| `TedCatCore/RecordingTarget.swift`      | Region or too small, decided from the selection; audio only for the menu. Pure, tested. |
+| `TedCat/Recording/ScreenRecorder.swift` | `SCStream` → `AVAssetWriter`: region + system audio to MP4, or system audio only to M4A. |
+| `TedCat/Recording/RecordingController.swift` | Recording lifecycle, file naming, quit-safety.                    |
+| `TedCat/Recording/RecordingHUD.swift`   | Floating stop pill: timer, saving, failure.                            |
+| `TedCat/Recording/SavedRecordingCard.swift` | Card shown after saving: name, folder, size, length, thumbnail; open, drag out, reveal. |
+| `TedCat/Recording/RecordingFrameWindow.swift` | Dashed outline around the recorded region.                       |
+| `TedCat/Capture/Clipboard.swift`        | Writes PNG + TIFF to the general pasteboard.                           |
+| `TedCat/Overlay/*`                      | Selection window and layer-based view.                                 |
+| `TedCat/Support/Preferences.swift`      | `UserDefaults`-backed settings.                                        |
+| `TedCat/Support/Permissions.swift`      | Accessibility and Screen Recording checks and deep links.              |
+| `TedCat/Support/ScreenGeometry.swift`   | CG ↔ Cocoa conversions, display lookup.                                |
+| `TedCat/Support/Log.swift`              | `os.Logger` categories.                                                |
 
 ## Extending
 

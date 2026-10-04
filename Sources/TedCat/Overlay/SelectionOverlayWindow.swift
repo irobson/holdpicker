@@ -1,5 +1,5 @@
 import AppKit
-import HoldPickerCore
+import TedCatCore
 
 /// A transparent, click-through window covering one screen while the user
 /// drags out a selection. Mouse input never reaches it: the event tap owns

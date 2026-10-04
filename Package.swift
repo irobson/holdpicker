@@ -2,20 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "HoldPicker",
+    name: "TedCat",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "HoldPicker", targets: ["HoldPicker"]),
-        .library(name: "HoldPickerCore", targets: ["HoldPickerCore"]),
+        .executable(name: "TedCat", targets: ["TedCat"]),
+        .library(name: "TedCatCore", targets: ["TedCatCore"]),
     ],
     targets: [
         // Pure logic: gesture state machine and geometry helpers. No AppKit.
-        .target(name: "HoldPickerCore"),
+        .target(name: "TedCatCore"),
 
         // The menu bar application.
         .executableTarget(
-            name: "HoldPicker",
-            dependencies: ["HoldPickerCore"],
+            name: "TedCat",
+            dependencies: ["TedCatCore"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ScreenCaptureKit"),
@@ -25,6 +25,6 @@ let package = Package(
             ]
         ),
 
-        .testTarget(name: "HoldPickerCoreTests", dependencies: ["HoldPickerCore"]),
+        .testTarget(name: "TedCatCoreTests", dependencies: ["TedCatCore"]),
     ]
 )

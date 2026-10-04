@@ -5,7 +5,7 @@ import Foundation
 public enum CaptureMode: Equatable, Sendable {
     /// A still image copied to the clipboard.
     case screenshot
-    /// A video (with system audio) of the region, saved to disk.
+    /// A video of the dragged region with system audio, saved to disk.
     case recording
 }
 

@@ -3,8 +3,9 @@ import AppKit
 /// The small floating pill shown while recording.
 ///
 /// It sits in the screen corner farthest from the recorded region, never takes
-/// focus, and is left out of the video. Clicking it stops the recording. After
-/// saving it briefly confirms, and a click then reveals the file in Finder.
+/// focus, and is left out of the video. Clicking it stops the recording. Once
+/// the file is written it gives way to `SavedRecordingCard`; failures stay on
+/// the pill for a few seconds.
 @MainActor
 final class RecordingHUD {
     private static let size = NSSize(width: 132, height: 34)
@@ -17,9 +18,12 @@ final class RecordingHUD {
     private let content: HUDView
     private var ticker: Timer?
     private var dismissWork: DispatchWorkItem?
-    private var savedURL: URL?
 
-    init(avoiding region: CGRect, on screen: NSScreen) {
+    /// The pill's frame in screen coordinates, so the saved card can take its corner.
+    var frame: NSRect { panel.frame }
+
+    /// - Parameter audioOnly: Shows a waveform instead of the red dot while recording.
+    init(avoiding region: CGRect, on screen: NSScreen, audioOnly: Bool = false) {
         let origin = Self.corner(avoiding: region, in: screen.visibleFrame)
         panel = NSPanel(
             contentRect: NSRect(origin: origin, size: Self.size),
@@ -37,7 +41,7 @@ final class RecordingHUD {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
 
-        content = HUDView(frame: NSRect(origin: .zero, size: Self.size))
+        content = HUDView(frame: NSRect(origin: .zero, size: Self.size), audioOnly: audioOnly)
         panel.contentView = content
         content.onClick = { [weak self] in self?.handleClick() }
     }
@@ -61,10 +65,9 @@ final class RecordingHUD {
         content.render(.saving)
     }
 
-    func showSaved(_ url: URL) {
-        savedURL = url
-        content.render(.saved)
-        scheduleDismiss()
+    /// Hides the pill right away (the saved card takes over).
+    func dismissNow() {
+        dismiss()
     }
 
     func showFailure(_ message: String) {
@@ -86,10 +89,7 @@ final class RecordingHUD {
     // MARK: - Interaction
 
     private func handleClick() {
-        if let savedURL {
-            NSWorkspace.shared.activateFileViewerSelecting([savedURL])
-            dismiss()
-        } else if ticker != nil {
+        if ticker != nil {
             onStop?()
         }
     }
@@ -146,18 +146,20 @@ private final class HUDView: NSView {
     enum Content: Equatable {
         case recording(elapsed: TimeInterval)
         case saving
-        case saved
         case failed
     }
 
     var onClick: (() -> Void)?
 
+    private let audioOnly: Bool
     private let background = NSVisualEffectView()
     private let dot = CALayer()
+    private let waveform = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let stopGlyph = NSImageView()
 
-    override init(frame: NSRect) {
+    init(frame: NSRect, audioOnly: Bool) {
+        self.audioOnly = audioOnly
         super.init(frame: frame)
         wantsLayer = true
 
@@ -176,6 +178,13 @@ private final class HUDView: NSView {
         dot.cornerRadius = dotSize / 2
         dot.backgroundColor = NSColor.systemRed.cgColor
         layer?.addSublayer(dot)
+
+        waveform.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
+        waveform.contentTintColor = .systemRed
+        waveform.frame = NSRect(x: 10, y: (bounds.height - 16) / 2, width: 18, height: 16)
+        waveform.wantsLayer = true
+        waveform.isHidden = true
+        addSubview(waveform)
 
         label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         label.textColor = .labelColor
@@ -211,28 +220,26 @@ private final class HUDView: NSView {
 
     func render(_ content: Content) {
         if case .recording = content {} else {
-            dot.removeAnimation(forKey: "pulse")
+            pulsingLayer?.removeAnimation(forKey: "pulse")
+            waveform.isHidden = true
+            dot.isHidden = false
         }
         switch content {
         case .recording(let elapsed):
             dot.backgroundColor = NSColor.systemRed.cgColor
-            dot.isHidden = false
+            dot.isHidden = audioOnly
+            waveform.isHidden = !audioOnly
             stopGlyph.isHidden = false
             stopGlyph.image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop recording")
             label.stringValue = Self.format(elapsed)
-            setAccessibilityLabel("Recording \(Self.format(elapsed)). Click to stop.")
+            let what = audioOnly ? "Recording audio" : "Recording"
+            setAccessibilityLabel("\(what) \(Self.format(elapsed)). Click to stop.")
             addPulse()
         case .saving:
             dot.backgroundColor = NSColor.systemOrange.cgColor
             stopGlyph.isHidden = true
             label.stringValue = "Saving…"
             setAccessibilityLabel("Saving recording")
-        case .saved:
-            dot.backgroundColor = NSColor.systemGreen.cgColor
-            stopGlyph.isHidden = false
-            stopGlyph.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Show in Finder")
-            label.stringValue = "Saved"
-            setAccessibilityLabel("Recording saved. Click to show in Finder.")
         case .failed:
             dot.backgroundColor = NSColor.systemYellow.cgColor
             stopGlyph.isHidden = true
@@ -241,15 +248,20 @@ private final class HUDView: NSView {
         }
     }
 
+    /// The red dot for video recordings, the waveform for audio-only ones.
+    private var pulsingLayer: CALayer? {
+        audioOnly ? waveform.layer : dot
+    }
+
     private func addPulse() {
-        guard dot.animation(forKey: "pulse") == nil else { return }
+        guard let target = pulsingLayer, target.animation(forKey: "pulse") == nil else { return }
         let pulse = CABasicAnimation(keyPath: "opacity")
         pulse.fromValue = 1
         pulse.toValue = 0.35
         pulse.duration = 0.8
         pulse.autoreverses = true
         pulse.repeatCount = .infinity
-        dot.add(pulse, forKey: "pulse")
+        target.add(pulse, forKey: "pulse")
     }
 
     private static func format(_ interval: TimeInterval) -> String {
