@@ -20,12 +20,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - A gesture in progress is abandoned when macOS disables and re-enables the event tap, instead of leaving a stale overlay that captures the next click.
 - `scripts/test.sh` no longer aborts under `set -u` on macOS's bash 3.2 when Xcode is the selected toolchain.
+- Launch at Login no longer silently snaps back off after TedCat is switched off under System Settings › General › Login Items. The menu item shows a mixed state, reads **Launch at Login: Allow in Login Items…** and opens Login Items, where only the user can turn it back on. Other failures are shown in an alert and logged with their error domain and code instead of being redacted.
 
 ### Changed
 - Renamed the app from HoldShot to TedCat (bundle identifier `dev.tedcat.TedCat`), after Ted, the cat on the icon. Recordings now go to `~/Movies/TedCat`.
 - App icon and menu bar glyph featuring Ted, generated into every required size at bundle time. While recording, the glyph's camera-lens eye turns red.
 - Shift is reserved for recording and removed from the trigger options.
 - TedCat's own windows are excluded from every capture, so screenshots taken while recording are clean.
+- CI uses `actions/checkout@v7` and `actions/upload-artifact@v7`, which run on Node 24 instead of the deprecated Node 20.
 
 ## [0.1.0] - 2026-09-22
 

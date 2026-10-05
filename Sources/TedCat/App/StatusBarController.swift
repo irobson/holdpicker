@@ -186,8 +186,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             item.state = item.tag == currentMs ? .on : .off
         }
 
-        loginItem.isEnabled = LaunchAtLogin.isAvailable
-        loginItem.state = LaunchAtLogin.isEnabled ? .on : .off
+        let loginState = LaunchAtLogin.state
+        switch loginState {
+        case .unavailable:
+            loginItem.title = "Launch at Login"
+            loginItem.isEnabled = false
+            loginItem.state = .off
+        case .off, .on:
+            loginItem.title = "Launch at Login"
+            loginItem.isEnabled = true
+            loginItem.state = loginState == .on ? .on : .off
+        case .needsApproval:
+            loginItem.title = "Launch at Login: Allow in Login Items…"
+            loginItem.isEnabled = true
+            loginItem.state = .mixed
+        }
     }
 
     // MARK: - Actions
@@ -248,11 +261,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleLaunchAtLogin() {
-        do {
-            try LaunchAtLogin.set(enabled: !LaunchAtLogin.isEnabled)
-        } catch {
-            Log.app.error("Launch at login failed: \(error.localizedDescription)")
-        }
+        LaunchAtLogin.set(enabled: LaunchAtLogin.state != .on)
         refresh()
     }
 
@@ -340,22 +349,64 @@ enum StatusIcon {
 }
 
 /// Thin wrapper over `SMAppService`. Only works when running from an `.app` bundle.
+@MainActor
 private enum LaunchAtLogin {
-    static var isAvailable: Bool {
-        Bundle.main.bundleURL.pathExtension == "app"
+    enum State {
+        /// Not running from a bundle (`swift run`): the option is unavailable.
+        case unavailable
+        case off
+        case on
+        /// Registered, but switched off under System Settings › General ›
+        /// Login Items. Only the user can turn it back on there.
+        case needsApproval
     }
 
-    static var isEnabled: Bool {
-        guard isAvailable else { return false }
-        return SMAppService.mainApp.status == .enabled
+    static var state: State {
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return .unavailable }
+        switch SMAppService.mainApp.status {
+        case .enabled: return .on
+        case .requiresApproval: return .needsApproval
+        default: return .off
+        }
     }
 
-    static func set(enabled: Bool) throws {
-        guard isAvailable else { return }
-        if enabled {
-            try SMAppService.mainApp.register()
-        } else {
-            try SMAppService.mainApp.unregister()
+    /// Turns the option on or off. Failures are shown, not just logged; when
+    /// macOS needs the user's approval, the Login Items settings open.
+    static func set(enabled: Bool) {
+        switch state {
+        case .unavailable:
+            return
+        case .needsApproval:
+            // register() would fail, and unregister() would undo the user's
+            // choice in System Settings: let them decide there.
+            SMAppService.openSystemSettingsLoginItems()
+            return
+        case .on, .off:
+            break
+        }
+
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            let nsError = error as NSError
+            Log.app.error("Launch at login failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public): \(nsError.localizedDescription, privacy: .public)")
+            if nsError.code == kSMErrorLaunchDeniedByUser {
+                SMAppService.openSystemSettingsLoginItems()
+                return
+            }
+            let alert = NSAlert()
+            alert.messageText = enabled ? "TedCat could not be added to Login Items" : "TedCat could not be removed from Login Items"
+            alert.informativeText = nsError.localizedDescription
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Open Login Items")
+            NSApp.activate()
+            if alert.runModal() == .alertSecondButtonReturn {
+                SMAppService.openSystemSettingsLoginItems()
+            }
         }
     }
 }
